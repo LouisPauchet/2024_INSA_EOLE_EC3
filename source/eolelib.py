@@ -5,11 +5,105 @@ from scipy.stats import zscore, weibull_min
 import numpy as np
 
 class ProcessWind():
-    def __init__(self, paths):
+    def __init__(self, paths, cp_path = None):
         self.paths = paths
         self._load_data(paths)
+        if cp_path is not None:
+            self._load_cp(path=cp_path)
+        else:
+            self._load_cp()
         self.params = {}
+        self.turbine = [
+            {
+                "name" : "Small_Rotor_Small_Gen",
+                "rotor_diam" : 130,
+                "mass" : 250,
+                "blade_tip_ground_clearance" : 30,
+                "rated_power" : 5,
+                "min_rot_speed" : 3.5,
+                "max_rot_speed" : 9,
+                "cut_in" : 3,
+                "cut_out" : 25,
+                "tower_eq_load" : 15
+            },
+            {
+                "name": "Small_Rotor_Large_Gen",
+                "rotor_diam": 130,
+                "mass": 400,
+                "blade_tip_ground_clearance": 30,
+                "rated_power": 8,
+                "min_rot_speed": 3.5,
+                "max_rot_speed": 9,
+                "cut_in": 3,
+                "cut_out": 25,
+                "tower_eq_load": 15
 
+            },
+            {
+                "name": "Large_Rotor_Small_Gen",
+                "rotor_diam": 160,
+                "mass": 400,
+                "blade_tip_ground_clearance": 30,
+                "rated_power": 8,
+                "min_rot_speed": 3.5,
+                "max_rot_speed": 9,
+                "cut_in": 3,
+                "cut_out": 25,
+                "tower_eq_load": 20
+            },
+            {
+                "name": "Large_Rotor_Large_Gen",
+                "rotor_diam": 160,
+                "mass": 600,
+                "blade_tip_ground_clearance": 30,
+                "rated_power": 8,
+                "min_rot_speed": 3.5,
+                "max_rot_speed": 9,
+                "cut_in": 3,
+                "cut_out": 25,
+                "tower_eq_load": 25
+            }
+        ]
+
+    def _load_cp(self, path = "./data/cp_data.dat"):
+        cp_data = pd.read_csv(path, sep='\s+', header=1, on_bad_lines='skip', names=["TSR", "Cp"])
+        self.cp_data = cp_data
+
+    def plot_cp(self, save=None, latex=False):
+        # Apply seaborn theme
+        sns.set_theme(style="ticks")
+
+        # Create the figure
+        fig = plt.figure(figsize=(6, 4))
+
+        # Plot Cp curve
+        plt.plot(self.cp_data["TSR"], self.cp_data["Cp"], label="Cp")
+
+        # Plot Betz limit
+        plt.plot(self.cp_data["TSR"], [16 / 27] * len(self.cp_data["TSR"]), "--r", label="Betz Limit")
+
+        # Find and mark Cp max
+        cp_max = self.cp_data["Cp"].max()
+        TSR_cp_max = self.cp_data[self.cp_data["Cp"] == cp_max]["TSR"].iloc[0]
+        plt.plot([TSR_cp_max], [cp_max], "+k", label="Max Cp")
+
+        # Annotate max Cp point
+        text = rf"$C_p = {cp_max:.2f}$" if latex else f"Cp = {cp_max:.2f}"
+        plt.text(TSR_cp_max, cp_max, text, fontsize=10, ha="center", va="bottom")
+
+        # Add labels and legend
+        plt.xlabel("TSR")
+        plt.ylabel("Cp")
+        plt.legend()
+
+        # Save the figure if needed
+        if save is not None:
+            if not isinstance(save, str):
+                raise ValueError("The 'save' parameter must be a string specifying the file path.")
+            plt.savefig(save, dpi=300, transparent=True, bbox_inches="tight")
+
+        # Show the plot
+        plt.show()
 
     def _load_data(self, paths):
         for i, path in enumerate(paths):
