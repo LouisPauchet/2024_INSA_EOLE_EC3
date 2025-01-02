@@ -602,7 +602,7 @@ class ProcessWind():
                 result = self._calc_performance_turbine(
                     turbine, self.params[key],
                     Cp=self.cp_data['Cp_max'], TSR=self.cp_data['TSR_max_Cp'])
-                result["wind_distribution"] = key
+                result["wind_distribution_name"] = key
                 result["turbine"] = turbine['name']
 
                 self.results.append(result)
