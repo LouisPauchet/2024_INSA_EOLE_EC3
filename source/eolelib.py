@@ -611,62 +611,6 @@ class ProcessWind():
 
 
 
-    def plot_performance(self):
-        """
-        Creates graphic representations of the capacity factor and AEP
-        for different wind distributions and turbines.
-
-        Parameters:
-            - results (list): List of dictionaries containing AEP and capacity factor data
-                              for each turbine and wind distribution.
-        """
-
-        results = self.results
-
-        # Extract unique turbines and wind distributions
-        turbines = list(set([result["turbine"] for result in results]))
-        wind_distributions = list(set([result["wind_distribution"] for result in results]))
-
-        # Prepare data structures for plotting
-        capacity_factors = {turbine: [] for turbine in turbines}
-        aeps = {turbine: [] for turbine in turbines}
-
-        for wind_dist in wind_distributions:
-            for turbine in turbines:
-                for result in results:
-                    if result["turbine"] == turbine and result["wind_distribution"] == wind_dist:
-                        capacity_factors[turbine].append(result["capacity_factor_%"])
-                        aeps[turbine].append(result["aep_GWh"])
-
-        # Plot Capacity Factor
-        plt.figure(figsize=(10, 6))
-        for turbine, values in capacity_factors.items():
-            plt.plot(wind_distributions, values, label=f'{turbine} (Capacity Factor)', marker='o')
-        plt.title("Capacity Factor for Different Wind Distributions")
-        plt.xlabel("Wind Distribution")
-        plt.ylabel("Capacity Factor (%)")
-        plt.xticks(rotation=45)
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
-        # Plot AEP
-        plt.figure(figsize=(10, 6))
-        for turbine, values in aeps.items():
-            plt.plot(wind_distributions, values, label=f'{turbine} (AEP)', marker='s')
-        plt.title("AEP for Different Wind Distributions")
-        plt.xlabel("Wind Distribution")
-        plt.ylabel("AEP (GW.h)")
-        plt.xticks(rotation=45)
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
-
-
-
 
 
 
