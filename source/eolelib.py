@@ -581,52 +581,20 @@ class ProcessWind():
 
     def calc_performances(self):
         """
-        Calculate the performance metrics for each wind turbine under different wind distributions.
+        Calculate and return performance metrics for turbines under different wind distributions.
 
-        This method iterates over all defined wind distributions (`self.params`) and turbines (`self.turbines`),
-        calculating their performance metrics using the `_calc_performance_turbine` method. The results are
-        stored in `self.results`.
-
-        Parameters:
-            None
+        The method uses `self.params` (Weibull fit parameters) and `self.turbines` (turbine specifications)
+        to compute metrics like power output and annual energy production (AEP) using `_calc_performance_turbine`.
 
         Returns:
-            None: The calculated performance results are stored in `self.results`, a list of dictionaries, where each
-            dictionary contains the performance metrics for a specific turbine and wind distribution.
-
-        Attributes Used:
-            - self.params (dict): Contains the Weibull fit parameters (shape, scale, and location) for the wind distributions.
-              Each key represents the name of a wind distribution, and the value is a dictionary with keys:
-                - `shape` (float): Weibull shape parameter (k).
-                - `scale` (float): Weibull scale parameter (λ).
-                - `location` (float): Location parameter (usually 0).
-            - self.turbines (list of dict): A list of turbine specifications. Each dictionary should contain:
-                - `name` (str): Name of the turbine.
-                - Other necessary parameters (e.g., rotor diameter, cut-in speed, cut-out speed, etc.).
-            - self.cp_data (dict): Contains aerodynamic performance data:
-                - `Cp_max` (float): Maximum power coefficient.
-                - `TSR_max_Cp` (float): Tip-speed ratio corresponding to `Cp_max`.
-
-        Example Result Structure:
-            self.results = [
-                {
-                    "wind_distribution": "Weibull_k2",  # Wind distribution name
-                    "turbine": "Small_Rotor_Small_Gen",  # Turbine name
-                    "wind_speeds_m/s": [...],  # Array of wind speeds
-                    "wind_distribution": [...],  # Probability distribution for wind speeds
-                    "power_W": [...],  # Power output for each wind speed
-                    "rotational_speed_rad/s": [...],  # Rotational speed for each wind speed
-                    "torque_Nm": [...],  # Torque for each wind speed
-                    "aep_Wh": 1234567.89,  # Annual Energy Production in Wh
-                },
-                ...
-            ]
+            list: A list of dictionaries, each containing:
+                - "wind_distribution" (str): Wind distribution name.
+                - "turbine" (str): Turbine name.
+                - Other performance metrics like power, torque, rotational speed, and AEP.
 
         Notes:
-            - The method uses the Weibull fit parameters from `self.params` to represent wind speed distributions.
-            - Turbine performance is evaluated for each distribution using the `_calc_performance_turbine` method.
-            - `self.results` can be further processed or exported for analysis.
-
+            - Results are stored in `self.results` and returned.
+            - Each turbine is evaluated for all wind distributions.
         """
         self.results = []
         for key in self.params.keys():
