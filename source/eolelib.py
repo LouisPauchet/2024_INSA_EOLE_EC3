@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.stats import zscore, weibull_min
+from scipy.interpolate import interp1d
 import numpy as np
 
 class ProcessWind():
@@ -13,7 +14,11 @@ class ProcessWind():
         else:
             self._load_cp()
         self.params = {}
-        self.turbine = [
+        self.physics = {
+            "air_density" : 1.225
+        }
+        self.cp_interpolator = None
+        self.turbines = [
             {
                 "name" : "Small_Rotor_Small_Gen",
                 "rotor_diam" : 130,
@@ -24,7 +29,8 @@ class ProcessWind():
                 "max_rot_speed" : 9,
                 "cut_in" : 3,
                 "cut_out" : 25,
-                "tower_eq_load" : 15
+                "tower_eq_load" : 15,
+                "efficiency" : 0.6
             },
             {
                 "name": "Small_Rotor_Large_Gen",
@@ -36,7 +42,8 @@ class ProcessWind():
                 "max_rot_speed": 9,
                 "cut_in": 3,
                 "cut_out": 25,
-                "tower_eq_load": 15
+                "tower_eq_load": 15,
+                "efficiency" : 0.6
 
             },
             {
@@ -44,12 +51,13 @@ class ProcessWind():
                 "rotor_diam": 160,
                 "mass": 400,
                 "blade_tip_ground_clearance": 30,
-                "rated_power": 8,
+                "rated_power": 5,
                 "min_rot_speed": 3.5,
                 "max_rot_speed": 9,
                 "cut_in": 3,
                 "cut_out": 25,
-                "tower_eq_load": 20
+                "tower_eq_load": 20,
+                "efficiency" : 0.6
             },
             {
                 "name": "Large_Rotor_Large_Gen",
@@ -61,39 +69,83 @@ class ProcessWind():
                 "max_rot_speed": 9,
                 "cut_in": 3,
                 "cut_out": 25,
-                "tower_eq_load": 25
+                "tower_eq_load": 25,
+                "efficiency" : 0.6
             }
         ]
+        self.results = []
+        self.wind_speeds = []
 
-    def _load_cp(self, path = "./data/cp_data.dat"):
+    def _load_cp(self, path = "./data/cp_data.dat", polyfit_degree = 5):
         cp_data = pd.read_csv(path, sep='\s+', header=1, on_bad_lines='skip', names=["TSR", "Cp"])
-        self.cp_data = cp_data
+
+        coeffs = np.polyfit(cp_data['TSR'], cp_data['Cp'], polyfit_degree)
+        poly = np.poly1d(coeffs)
+
+        TSR_fine = np.linspace(cp_data['TSR'].min(), cp_data['TSR'].max(), 1000)
+        Cp_fine = poly(TSR_fine)
+
+        df_fine = pd.DataFrame(
+            {
+                'Cp' : Cp_fine,
+                'TSR' : TSR_fine,
+            }
+        )
+
+        max_index = np.argmax(Cp_fine)
+        max_Cp = Cp_fine[max_index]
+        corresponding_TSR = TSR_fine[max_index]
+
+        self.cp_data = {
+            "df" : cp_data,
+            "coeffs" : coeffs,
+            "poly" : poly,
+            "degree" : polyfit_degree,
+            "df_fine" : df_fine,
+            "Cp_max" : max_Cp,
+            "TSR_max_Cp" : corresponding_TSR
+        }
 
     def plot_cp(self, save=None, latex=False):
+        """
+        Plot the Cp vs TSR curve along with the Betz limit and maximum Cp point.
+
+        Parameters:
+            save (str, optional): File path to save the plot. Default is None.
+            latex (bool, optional): Use LaTeX for the annotation text. Default is False.
+        """
         # Apply seaborn theme
         sns.set_theme(style="ticks")
 
         # Create the figure
         fig = plt.figure(figsize=(6, 4))
 
-        # Plot Cp curve
-        plt.plot(self.cp_data["TSR"], self.cp_data["Cp"], label="Cp")
+        # Plot the Cp curve (fitted and data points)
+        plt.plot(self.cp_data["df_fine"]["TSR"], self.cp_data["df_fine"]["Cp"],
+                 label=f"Polynomial Fit (Degree {self.cp_data['degree']})", color="blue")
+        plt.scatter(self.cp_data["df"]["TSR"], self.cp_data["df"]["Cp"], label="Data Points", color="orange",
+                    marker="+")
 
         # Plot Betz limit
-        plt.plot(self.cp_data["TSR"], [16 / 27] * len(self.cp_data["TSR"]), "--r", label="Betz Limit")
+        betz_limit = 16 / 27
+        plt.axhline(betz_limit, linestyle="--", color="red", label="Betz Limit")
 
-        # Find and mark Cp max
-        cp_max = self.cp_data["Cp"].max()
-        TSR_cp_max = self.cp_data[self.cp_data["Cp"] == cp_max]["TSR"].iloc[0]
-        plt.plot([TSR_cp_max], [cp_max], "+k", label="Max Cp")
+        # Mark the maximum Cp point
+        max_Cp = self.cp_data["Cp_max"]
+        TSR_max_Cp = self.cp_data["TSR_max_Cp"]
 
-        # Annotate max Cp point
-        text = rf"$C_p = {cp_max:.2f}$" if latex else f"Cp = {cp_max:.2f}"
-        plt.text(TSR_cp_max, cp_max, text, fontsize=10, ha="center", va="bottom")
+        # Add the maximum Cp point with the value in the legend
+        max_label = (
+            rf"Max Cp ($C_p = {max_Cp:.2f}$, TSR = {TSR_max_Cp:.2f})"
+            if latex else
+            f"Max Cp (Cp = {max_Cp:.2f}, TSR = {TSR_max_Cp:.2f})"
+        )
+        plt.plot([TSR_max_Cp], [max_Cp], "or", label=max_label)
 
-        # Add labels and legend
+        # Add labels, title, and legend
         plt.xlabel("TSR")
         plt.ylabel("Cp")
+        plt.title("Power Coefficient (Cp) vs Tip-Speed Ratio (TSR)")
         plt.legend()
 
         # Save the figure if needed
@@ -106,6 +158,17 @@ class ProcessWind():
         plt.show()
 
     def _load_data(self, paths):
+        """
+        Load and process multiple time series data files into a unified DataFrame.
+
+        Parameters:
+            paths (list of str): List of file paths to the data files. Each file should contain:
+                - "time": A timestamp column (format: "%d-%b-%Y-%H:%M:%S").
+                - A second column with numeric data (e.g., wind speed) named based on the file name.
+
+        Returns:
+            None: The data is stored in `self.df` as a Pandas DataFrame with a datetime index.
+        """
         for i, path in enumerate(paths):
             name = (path.split('/')[-1]).split(".")[0]
             df = pd.read_csv(path, sep='\s+', header=1, on_bad_lines='skip',
@@ -118,6 +181,19 @@ class ProcessWind():
                 self.df = pd.concat([self.df, df])
 
     def box_plot(self, labels=None, save=None, title='Boxplot of Wind Speeds', ylabel='Wind Speed (m/s)'):
+        """
+        Create a boxplot for the loaded time series data.
+
+        Parameters:
+            labels (list of str, optional): Custom labels for the boxplot's x-axis.
+                Defaults to the column names of `self.df`.
+            save (str, optional): File path to save the boxplot image. Default is None.
+            title (str, optional): Title of the boxplot. Default is 'Boxplot of Wind Speeds'.
+            ylabel (str, optional): Label for the y-axis. Default is 'Wind Speed (m/s)'.
+
+        Returns:
+            None: Displays the boxplot. Optionally saves it if `save` is specified.
+        """
         if labels is None:
             labels = [key for key in self.df.keys()]
         plt.figure(figsize=(10, 6))
@@ -184,8 +260,10 @@ class ProcessWind():
         if save is not None:
             plt.savefig(save, dpi=300)
 
+        ax = plt.gca()
         # Display the plot
         plt.show()
+        return ax
 
     def clean_data(self):
         for col in self.df.keys():
@@ -198,6 +276,11 @@ class ProcessWind():
 
                 # Drop the temporary Z-score column
                 self.df.drop(columns=['Z_score'], inplace=True)
+
+        max_wind = 0
+        for wind in self.df.keys():
+            max_wind = max(max_wind, self.df[wind].max())
+        self.wind_speeds = np.linspace(0, max_wind, len(self.df))
 
         return self.df
 
@@ -216,9 +299,408 @@ class ProcessWind():
 
                 # Store the parameters in a dictionary
                 self.params[col] = {
+                    'wind_distribution': col,
                     'shape': shape,  # k
                     'scale': scale,  # λ
                     'location': loc  # Should be 0 as floc=0
                 }
 
         return self.params
+
+    def _calc_turbine_power_curve(self, wind_speed, r_rotor, cut_in, cut_out, rho=1.225, eta=0.6, Cp=0.593):
+        """
+        Calculate the power generated by a wind turbine.
+
+        Parameters:
+            wind_speed (array-like): Wind speed in meters per second (m/s).
+            r_rotor (float): Rotor radius in meters (m).
+            cut_in (float): Cut-in wind speed in m/s.
+            cut_out (float): Cut-out wind speed in m/s.
+            rho (float, optional): Air density in kilograms per cubic meter (kg/m³). Default is 1.225 kg/m³.
+            eta (float, optional): Efficiency of the wind turbine. Default is 0.6.
+            Cp (float, optional): Power coefficient of the turbine. Default is Betz limit (0.593).
+
+        Returns:
+            array-like: Generated power in watts (W).
+        """
+        # Calculate rotor area
+        A = np.pi * r_rotor ** 2
+
+        # Calculate theoretical power
+        power = 0.5 * rho * A * wind_speed ** 3 * Cp * eta
+
+        # Set power to 0 outside the cut-in and cut-out range
+        power = np.where((wind_speed < cut_in) | (wind_speed > cut_out), 0, power)
+
+        return power
+
+    def _calc_turbine_rotation_speed(self, wind_speed, r_rotor, TSR, cut_in, cut_out, rot_min, rot_max):
+        """
+        Calculate the rotational speed of the wind turbine rotor.
+
+        Parameters:
+            wind_speed (float): Wind speed in meters per second (m/s).
+            r_rotor (float): Rotor radius in meters (m).
+            TSR (float): Tip-speed ratio of the turbine.
+            rot_min (float): Minimum rotational speed in radians per second (rpm).
+            rot_max (float): Maximum rotational speed in radians per second (rpm).
+
+        Returns:
+            float: Rotational speed in radians per second (rad/s).
+        """
+        rot_min, rot_max = self.rotmin2rads(rot_min), self.rotmin2rads(rot_max)
+        # Rotational speed in radians per second
+        omega = (TSR * wind_speed) / r_rotor
+
+        # Set power to 0 outside the cut-in and cut-out range
+        omega = np.where((wind_speed < cut_in) | (wind_speed > cut_out), 0, omega)
+
+        # Enforce rotational speed limits
+        omega = np.clip(omega, rot_min, rot_max)
+
+        return omega
+
+    def rads2rotmin(self, omega):
+        """
+        Convert rotational speed from radians per second (rad/s) to revolutions per minute (rpm).
+
+        Parameters:
+            omega (float): Rotational speed in radians per second (rad/s).
+
+        Returns:
+            float: Rotational speed in revolutions per minute (rpm).
+        """
+        # Convert rad/s to rpm
+        rot_min = omega * (60 / (2 * np.pi))
+        return rot_min
+
+    def rotmin2rads(self, omega):
+        """
+        Convert rotational speed from revolutions per minute (rpm) to radians per second (rad/s).
+
+        Parameters:
+            omega (float): Rotational speed in revolutions per minute (rpm).
+
+        Returns:
+            float: Rotational speed in radians per second (rad/s).
+        """
+        # Convert rpm to rad/s
+        rad_sec = omega * ((2 * np.pi) / 60)
+        return rad_sec
+
+    def _calc_torque_turbine(self, P, omega):
+        """
+        Calculate the torque generated by the turbine.
+
+        Parameters:
+            P (float): Power in watts (W).
+            omega (float): Rotational speed in radians per second (rad/s).
+
+        Returns:
+            float: Torque in newton-meters (Nm). If omega is zero, torque will be zero to avoid division by zero.
+        """
+        # Torque = Power / Rotational Speed
+        # Ensure no division by zero
+        torque = np.where(omega != 0, P / omega, 0)
+        return torque
+
+    def _calc_wind_speed(self, shape, scale, loc, cut_in, cut_out, plot=False, max_wind_speed=None, points=1000):
+        """
+        Generate wind speed distribution based on the Weibull probability density function.
+
+        Parameters:
+            shape (float): Shape parameter (k) of the Weibull distribution.
+            scale (float): Scale parameter (λ) of the Weibull distribution.
+            loc (float): Location parameter (typically 0 for wind speed).
+            cut_in (float): Cut-in wind speed in meters per second (m/s).
+            cut_out (float): Cut-out wind speed in meters per second (m/s).
+            plot (bool, optional): Whether to plot the wind speed probability distribution. Default is False.
+            max_wind_speed (float, optional): Maximum wind speed for the range. Default is 1.5 * cut_out.
+            points (int, optional): Number of points in the wind speed range. Default is 1000.
+
+        Returns:
+            tuple: A tuple containing:
+                - wind_speed (numpy.ndarray): Array of wind speeds in meters per second (m/s).
+                - wind_probability (numpy.ndarray): Probability density function values for the turbine's operating range.
+
+        Raises:
+            AssertionError: If the integral of the PDF is not close to 1 after applying cut-in and cut-out limits.
+
+        Notes:
+            - The integral of the Weibull PDF is ensured to be ≤ 1 within the wind speed range.
+            - The function can plot the distribution if `plot` is set to True.
+        """
+        if max_wind_speed is None:
+            max_wind_speed = cut_out * 1.5
+
+        # Generate wind speed range
+        wind_speed = np.linspace(0, max_wind_speed, points)
+
+        # Calculate Weibull probability density function
+        wind_probability_raw = weibull_min.pdf(wind_speed, shape, loc=loc, scale=scale)
+
+        wind_probability = wind_probability_raw.copy()
+        wind_probability[(wind_speed < cut_in) | (wind_speed > cut_out)] = 0
+
+        # Assert the integral of PDF within the wind speed range is close to 1
+        integral = np.trapezoid(wind_probability, wind_speed)
+        assert integral <= 1, f"Integral of wind probability is not close to 1: {integral}"
+
+        # Plot if required
+        if plot:
+            plt.figure(figsize=(8, 5))
+            plt.plot(wind_speed, wind_probability_raw, label="Original Weibull PDF", linestyle="--")
+            plt.plot(wind_speed, wind_probability, label="Turbine Density (cut-in/out applied)", linestyle="-")
+            plt.axvline(cut_in, color='g', linestyle='--', label="Cut-in Speed")
+            plt.axvline(cut_out, color='r', linestyle='--', label="Cut-out Speed")
+            plt.xlabel("Wind Speed (m/s)")
+            plt.ylabel("Probability Density")
+            plt.title("Wind Speed Probability Distribution")
+            plt.legend()
+            plt.grid()
+            plt.show()
+
+        return wind_speed, wind_probability
+
+    def _calc_performance_turbine(self, turbine, param, Cp=0.593, TSR=7.5, plot=False, nb_points=None):
+        """
+        Calculate the performance metrics of a wind turbine.
+
+        Parameters:
+            turbine (dict): Turbine specifications, including:
+                - 'rotor_diam' (float): Rotor diameter in meters.
+                - 'efficiency' (float): Efficiency of the turbine (fractional).
+                - 'cut_in' (float): Cut-in wind speed in m/s.
+                - 'cut_out' (float): Cut-out wind speed in m/s.
+            param (dict): Weibull distribution parameters, including:
+                - 'shape' (float): Shape parameter (k).
+                - 'scale' (float): Scale parameter (λ).
+                - 'location' (float): Location parameter (floc, typically 0).
+            Cp (float, optional): Power coefficient of the turbine (default is 0.593).
+            TSR (float, optional): Tip-speed ratio (default is 7.5).
+            plot (bool, optional): Whether to plot the turbine performance metrics (default is False).
+            nb_points (int, optional): Number of points to compute (Default is None)
+
+        Returns:
+            dict: A dictionary containing:
+                - 'wind_speeds_m/s': Wind speed values (m/s).
+                - 'wind_distribution': Probability density of wind speeds.
+                - 'power_W': Power output at each wind speed (W).
+                - 'rotational_speed_rad/s': Rotational speed at each wind speed (rad/s).
+                - 'torque_Nm': Torque at each wind speed (Nm).
+                - 'aep_Wh': Annual energy production (Wh/year).
+        """
+        result = {}
+        # Prepare additional parameters
+        extra_args = {}
+        if nb_points is not None:
+            extra_args['points'] = nb_points
+
+        # Calculate wind speed distribution
+        wind_speeds, wind_distribution = self._calc_wind_speed(
+            param['shape'], param['scale'], param['location'],
+            turbine['cut_in'], turbine['cut_out'],
+            **extra_args  # Unpack additional parameters
+        )
+
+        result['wind_speeds_m/s'] = wind_speeds
+        result['wind_distribution'] = wind_distribution
+
+        # Calculate the power curve for the turbine
+        power = self._calc_turbine_power_curve(
+            wind_speeds, turbine['rotor_diam'] / 2,
+            turbine['cut_in'], turbine['cut_out'],
+            eta=turbine['efficiency'], rho=self.physics['air_density']
+        )
+        power = np.clip(power, 0, turbine['rated_power'] * 1e6) #rated_power is in MW
+        result['power_W'] = power
+
+        # Calculate the rotational speed
+        rotational_speed = self._calc_turbine_rotation_speed(
+            wind_speeds,
+            turbine['rotor_diam'] / 2,
+            TSR,
+            turbine['cut_in'],
+            turbine['cut_out'],
+            turbine["min_rot_speed"],
+            turbine["max_rot_speed"]
+        )
+        result['rotational_speed_rad/s'] = rotational_speed
+
+        # Calculate the torque
+        torque = self._calc_torque_turbine(power, rotational_speed)
+        result['torque_Nm'] = torque
+
+        # Compute the Annual Energy Production (AEP)
+        aep = np.trapezoid(power * wind_distribution, wind_speeds) * 3600 * 24 * 365  # AEP in Joules/year
+        aep = aep / 3600  # Convert AEP to Wh/year
+        result['aep_Wh'] = aep
+
+        # Plot the performance metrics if requested
+        if plot:
+
+            # Plot the wind distribution
+            plt.figure()
+            plt.plot(wind_speeds, wind_distribution, label="Wind Distribution")
+            plt.xlabel("Wind Speed (m/s)")
+            plt.ylabel("Probability Density")
+            plt.title("Wind Speed Distribution")
+            plt.legend()
+            plt.grid()
+
+            # Plot the power curve
+            plt.figure()
+            plt.plot(wind_speeds, power, label="Power Output")
+            plt.xlabel("Wind Speed (m/s)")
+            plt.ylabel("Power (W)")
+            plt.title("Power Curve")
+            plt.legend()
+            plt.grid()
+
+            # Plot the rotational speed
+            plt.figure()
+            plt.plot(wind_speeds, self.rads2rotmin(rotational_speed), label="Rotational Speed")
+            plt.xlabel("Wind Speed (m/s)")
+            plt.ylabel("Rotational Speed (rot/min)")
+            plt.title("Rotational Speed vs Wind Speed")
+            plt.legend()
+            plt.grid()
+
+            # Plot the torque curve
+            plt.figure()
+            plt.plot(wind_speeds, torque, label="Torque")
+            plt.xlabel("Wind Speed (m/s)")
+            plt.ylabel("Torque (Nm)")
+            plt.title("Torque vs Wind Speed")
+            plt.legend()
+            plt.grid()
+
+            plt.show()
+
+        return result
+
+    def calc_performances(self):
+        """
+        Calculate the performance metrics for each wind turbine under different wind distributions.
+
+        This method iterates over all defined wind distributions (`self.params`) and turbines (`self.turbines`),
+        calculating their performance metrics using the `_calc_performance_turbine` method. The results are
+        stored in `self.results`.
+
+        Parameters:
+            None
+
+        Returns:
+            None: The calculated performance results are stored in `self.results`, a list of dictionaries, where each
+            dictionary contains the performance metrics for a specific turbine and wind distribution.
+
+        Attributes Used:
+            - self.params (dict): Contains the Weibull fit parameters (shape, scale, and location) for the wind distributions.
+              Each key represents the name of a wind distribution, and the value is a dictionary with keys:
+                - `shape` (float): Weibull shape parameter (k).
+                - `scale` (float): Weibull scale parameter (λ).
+                - `location` (float): Location parameter (usually 0).
+            - self.turbines (list of dict): A list of turbine specifications. Each dictionary should contain:
+                - `name` (str): Name of the turbine.
+                - Other necessary parameters (e.g., rotor diameter, cut-in speed, cut-out speed, etc.).
+            - self.cp_data (dict): Contains aerodynamic performance data:
+                - `Cp_max` (float): Maximum power coefficient.
+                - `TSR_max_Cp` (float): Tip-speed ratio corresponding to `Cp_max`.
+
+        Example Result Structure:
+            self.results = [
+                {
+                    "wind_distribution": "Weibull_k2",  # Wind distribution name
+                    "turbine": "Small_Rotor_Small_Gen",  # Turbine name
+                    "wind_speeds_m/s": [...],  # Array of wind speeds
+                    "wind_distribution": [...],  # Probability distribution for wind speeds
+                    "power_W": [...],  # Power output for each wind speed
+                    "rotational_speed_rad/s": [...],  # Rotational speed for each wind speed
+                    "torque_Nm": [...],  # Torque for each wind speed
+                    "aep_Wh": 1234567.89,  # Annual Energy Production in Wh
+                },
+                ...
+            ]
+
+        Notes:
+            - The method uses the Weibull fit parameters from `self.params` to represent wind speed distributions.
+            - Turbine performance is evaluated for each distribution using the `_calc_performance_turbine` method.
+            - `self.results` can be further processed or exported for analysis.
+
+        """
+        self.results = []
+        for key in self.params.keys():
+            for turbine in self.turbines:
+                result = self._calc_performance_turbine(
+                    turbine, self.params[key],
+                    Cp=self.cp_data['Cp_max'], TSR=self.cp_data['TSR_max_Cp'])
+                result["wind_distribution"] = key
+                result["turbine"] = turbine['name']
+
+                self.results.append(result)
+
+        return self.results
+
+
+
+    def plot_performance(self):
+        """
+        Creates graphic representations of the capacity factor and AEP
+        for different wind distributions and turbines.
+
+        Parameters:
+            - results (list): List of dictionaries containing AEP and capacity factor data
+                              for each turbine and wind distribution.
+        """
+
+        results = self.results
+
+        # Extract unique turbines and wind distributions
+        turbines = list(set([result["turbine"] for result in results]))
+        wind_distributions = list(set([result["wind_distribution"] for result in results]))
+
+        # Prepare data structures for plotting
+        capacity_factors = {turbine: [] for turbine in turbines}
+        aeps = {turbine: [] for turbine in turbines}
+
+        for wind_dist in wind_distributions:
+            for turbine in turbines:
+                for result in results:
+                    if result["turbine"] == turbine and result["wind_distribution"] == wind_dist:
+                        capacity_factors[turbine].append(result["capacity_factor_%"])
+                        aeps[turbine].append(result["aep_GWh"])
+
+        # Plot Capacity Factor
+        plt.figure(figsize=(10, 6))
+        for turbine, values in capacity_factors.items():
+            plt.plot(wind_distributions, values, label=f'{turbine} (Capacity Factor)', marker='o')
+        plt.title("Capacity Factor for Different Wind Distributions")
+        plt.xlabel("Wind Distribution")
+        plt.ylabel("Capacity Factor (%)")
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+        # Plot AEP
+        plt.figure(figsize=(10, 6))
+        for turbine, values in aeps.items():
+            plt.plot(wind_distributions, values, label=f'{turbine} (AEP)', marker='s')
+        plt.title("AEP for Different Wind Distributions")
+        plt.xlabel("Wind Distribution")
+        plt.ylabel("AEP (GW.h)")
+        plt.xticks(rotation=45)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+
+
+
+
+
+
+
+
