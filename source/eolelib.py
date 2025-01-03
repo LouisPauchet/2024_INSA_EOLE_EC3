@@ -4,6 +4,7 @@ import seaborn as sns
 from scipy.stats import zscore, weibull_min
 from scipy.interpolate import interp1d
 import numpy as np
+import os
 
 class ProcessWind():
     def __init__(self, paths, cp_path = None):
@@ -15,7 +16,12 @@ class ProcessWind():
             self._load_cp()
         self.params = {}
         self.physics = {
-            "air_density" : 1.225
+            "air_density" : 1.225,
+            "opex_per_MW_per_year" : 1e5,
+            "life_time_year" : 25,
+            "decommissioning_per_MW" : 2e5,
+            "discount_rate" : 0.07
+
         }
         self.cp_interpolator = None
         self.turbines = [
@@ -30,7 +36,8 @@ class ProcessWind():
                 "cut_in" : 3,
                 "cut_out" : 25,
                 "tower_eq_load" : 15,
-                "efficiency" : 0.6
+                "efficiency" : 0.6,
+                "cost" : 15e6
             },
             {
                 "name": "Small_Rotor_Large_Gen",
@@ -43,7 +50,8 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 15,
-                "efficiency" : 0.6
+                "efficiency" : 0.6,
+                "cost" : 20e6
 
             },
             {
@@ -57,7 +65,8 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 20,
-                "efficiency" : 0.6
+                "efficiency" : 0.6,
+                "cost" : 20e6
             },
             {
                 "name": "Large_Rotor_Large_Gen",
@@ -70,7 +79,8 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 25,
-                "efficiency" : 0.6
+                "efficiency" : 0.6,
+                "cost" : 24e6
             }
         ]
         self.results = []
@@ -536,6 +546,27 @@ class ProcessWind():
         aep = aep / 3600  # Convert AEP to Wh/year
         result['aep_Wh'] = aep
 
+        #Compute Capacity Factor
+        rated_annual_power = turbine['rated_power'] * 1e6 #Conversion in MW in W
+        rated_annual_power = rated_annual_power * 24 * 365
+        capacity_factor = aep / rated_annual_power * 100 #Conversion in %
+
+        result['capacity_factor_%'] = capacity_factor
+
+        # Compute LCOE
+        total_cost = turbine['cost'] + (
+                    self.physics['life_time_year'] * self.physics['opex_per_MW_per_year'] * turbine['rated_power']) + (
+            (self.physics["decommissioning_per_MW"] * turbine['rated_power']) / ((1+self.physics["discount_rate"]) ** self.physics['life_time_year'])
+        )
+        #Convert to MWh
+        total_energy = aep * self.physics['life_time_year'] / 1e6
+        LCOE = total_cost / total_energy
+
+
+        result['LCOE_€/MWh'] = LCOE
+        result['total_cost'] = total_cost
+        result['total_energy'] = total_energy
+
         # Plot the performance metrics if requested
         if plot:
 
@@ -608,6 +639,247 @@ class ProcessWind():
                 self.results.append(result)
 
         return self.results
+
+    def _plot_performances_parameters_multiplot(self, save=None, turbine_names=None, wind_distribution_names=None, cmap='cividis'):
+        """
+        Plots AEP vs. Capacity Factor with LCOE as a color bar for each wind distribution.
+
+        Parameters:
+            save (str): Path to save the plot. If None, the plot is not saved.
+            turbine_names (dict): Optional dictionary to map turbine IDs to custom names.
+                                  Example: {'Turbine1': 'Custom Name 1'}
+            wind_distribution_names (dict): Optional dictionary to map wind distribution IDs to custom names.
+                                             Example: {'WindDist1': 'Custom Wind 1'}
+            cmap (str): Colormap for LCOE visualization.
+        """
+
+        if self.results is None:
+            self.calc_performances()
+
+        # Set Seaborn style
+        sns.set_theme(style='ticks')
+
+        # Extract unique wind distributions and turbines
+        wind_distributions = list(set(res['wind_distribution_name'] for res in self.results))
+        turbines = list(set(res['turbine'] for res in self.results))
+        markers = ['o', 's', '^', 'D', 'P', '*']  # Define markers for turbines
+
+        # Apply custom names if provided
+        wind_dist_labels = (
+            {wd: wind_distribution_names.get(wd, wd) for wd in wind_distributions}
+            if wind_distribution_names
+            else {wd: wd for wd in wind_distributions}
+        )
+        turbine_labels = (
+            {t: turbine_names.get(t, t) for t in turbines}
+            if turbine_names
+            else {t: t for t in turbines}
+        )
+
+        # Create a vertical subplot for each wind distribution
+        fig, axes = plt.subplots(len(wind_distributions), 1, figsize=(7, 3 * len(wind_distributions)))
+
+        if len(wind_distributions) == 1:
+            axes = [axes]  # Ensure axes is a list when there's only one subplot
+
+        # Track handles for a unified legend
+        handles = []
+
+        for ax, wind_dist in zip(axes, wind_distributions):
+            # Filter results for the current wind distribution
+            filtered_results = [res for res in self.results if res['wind_distribution_name'] == wind_dist]
+
+            # Extract the min and max LCOE values for this wind distribution
+            lcoe_values = [res['LCOE_€/MWh'] for res in filtered_results]
+            lcoe_min, lcoe_max = min(lcoe_values), max(lcoe_values)
+
+            for turbine, marker in zip(turbines, markers):
+                # Filter data for the current turbine
+                turbine_data = [res for res in filtered_results if res['turbine'] == turbine]
+
+                # Extract values for plotting
+                aep = [res['aep_Wh'] / 1e9 for res in turbine_data]  # Convert AEP to GWh
+                capacity_factor = [res['capacity_factor_%'] for res in turbine_data]
+                lcoe = [res['LCOE_€/MWh'] for res in turbine_data]
+
+                # Scatter plot
+                sc = ax.scatter(
+                    aep,
+                    capacity_factor,
+                    c=lcoe,
+                    cmap=cmap,
+                    label=turbine_labels[turbine],
+                    s=100,
+                    marker=marker,
+                    edgecolors='black',
+                    vmin=lcoe_min,  # Set the min value for the colorbar
+                    vmax=lcoe_max  # Set the max value for the colorbar
+                )
+
+                # Collect legend handles (black marker)
+                if len(handles) < len(turbines):  # Add each turbine only once
+                    handles.append(plt.Line2D([], [], color='black', marker=marker, linestyle='', markersize=10,
+                                              label=turbine_labels[turbine]))
+
+            # Add a dedicated color bar for each subplot
+            cbar = fig.colorbar(sc, ax=ax, orientation='vertical')
+            cbar.set_label('LCOE (€/MWh)')
+            cbar.ax.set_ylim(lcoe_min, lcoe_max)  # Dynamically set colorbar limits
+
+            ax.set_title(f'Wind Distribution: {wind_dist_labels[wind_dist]}', fontsize=13, weight='bold')
+            ax.set_xlabel('AEP (GWh)', fontsize=12)
+            ax.set_ylabel('Capacity Factor (%)', fontsize=12)
+            ax.grid(linestyle='--', alpha=0.7)
+            ax.set_xlim(0, 50)  # Adjust x-axis limits
+            ax.set_ylim(0, 100)  # Adjust y-axis limits
+
+        # Add a unified legend below the plots
+        fig.legend(handles=handles, loc='lower center', ncol=len(turbines), title='Turbines',
+                   bbox_to_anchor=(0.5, -0.08), fontsize=10, title_fontsize=12)
+
+        plt.tight_layout()
+
+        # Save the plot if save_path is provided
+        if save:
+            os.makedirs(os.path.dirname(save), exist_ok=True)  # Create directory if it doesn't exist
+            plt.savefig(save, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to {save}")
+
+        # Show the plot
+        plt.show()
+
+
+    def _plot_performances_parameters_monoplot(self, save=None, turbine_names=None, wind_distribution_names=None,
+                                     cmap='viridis'):
+        """
+        Plots AEP vs. Capacity Factor with LCOE as a color bar, using marker edge colors for wind distributions.
+
+        Parameters:
+            save (str): Path to save the plot. If None, the plot is not saved.
+            turbine_names (dict): Optional dictionary to map turbine IDs to custom names.
+                                  Example: {'Turbine1': 'Custom Name 1'}
+            wind_distribution_names (dict): Optional dictionary to map wind distribution IDs to custom names.
+                                             Example: {'WindDist1': 'Custom Wind 1'}
+            cmap (str): Colormap for LCOE visualization.
+        """
+
+        if self.results is None:
+            self.calc_performances()
+
+        # Set Seaborn style
+        sns.set_theme(style='ticks')
+
+        # Extract unique wind distributions and turbines
+        wind_distributions = list(set(res['wind_distribution_name'] for res in self.results))
+        turbines = list(set(res['turbine'] for res in self.results))
+        markers = ['o', 's', '^', 'D', 'P', '*']  # Define markers for turbines
+
+        # Generate unique edge colors for wind distributions
+        edge_colors = sns.color_palette('husl', len(wind_distributions))
+
+        # Apply custom names if provided
+        wind_dist_labels = (
+            {wd: wind_distribution_names.get(wd, wd) for wd in wind_distributions}
+            if wind_distribution_names
+            else {wd: wd for wd in wind_distributions}
+        )
+        turbine_labels = (
+            {t: turbine_names.get(t, t) for t in turbines}
+            if turbine_names
+            else {t: t for t in turbines}
+        )
+
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        # Track handles for turbine and wind distribution legends
+        turbine_handles = []
+        wind_handles = []
+        handle_turbine_legend = True
+        for wind_dist, edge_color in zip(wind_distributions, edge_colors):
+            # Filter results for the current wind distribution
+            filtered_results = [res for res in self.results if res['wind_distribution_name'] == wind_dist]
+
+            for turbine, marker in zip(turbines, markers):
+                # Filter data for the current turbine
+                turbine_data = [res for res in filtered_results if res['turbine'] == turbine]
+
+                # Extract values for plotting
+                aep = [res['aep_Wh'] / 1e9 for res in turbine_data]  # Convert AEP to GWh
+                capacity_factor = [res['capacity_factor_%'] for res in turbine_data]
+                lcoe = [res['LCOE_€/MWh'] for res in turbine_data]
+
+                # Scatter plot
+                sc = ax.scatter(
+                    aep,
+                    capacity_factor,
+                    c=lcoe,
+                    cmap=cmap,
+                    s=100,
+                    marker=marker,
+                    edgecolors=edge_color,
+                    linewidth=2,
+                    vmin=min(res['LCOE_€/MWh'] for res in self.results),
+                    vmax=max(res['LCOE_€/MWh'] for res in self.results),
+                )
+
+                # Collect turbine handles (black fill with unique markers)
+                if handle_turbine_legend:
+                    if turbine not in [h.get_label() for h in turbine_handles]:
+                        turbine_handles.append(
+                            plt.Line2D([], [], color='black', marker=marker, linestyle='', markersize=10,
+                                       label=turbine_labels[turbine]))
+
+            # Collect wind distribution handles (edge color with a generic marker)
+            if wind_dist not in [h.get_label() for h in wind_handles]:
+                wind_handles.append(plt.Line2D([], [], color=edge_color, marker='o', linestyle='', markersize=10,
+                                               label=wind_dist_labels[wind_dist]))
+
+            handle_turbine_legend = False
+
+        # Add color bar for LCOE
+        cbar = fig.colorbar(sc, ax=ax, orientation='vertical')
+        cbar.set_label('LCOE (€/MWh)')
+
+        # Set axis labels and title
+        ax.set_title('Performance Parameters', fontsize=14, weight='bold')
+        ax.set_xlabel('AEP (GWh)', fontsize=12)
+        ax.set_ylabel('Capacity Factor (%)', fontsize=12)
+        ax.grid(linestyle='--', alpha=0.7)
+        ax.set_xlim(0, 50)  # Adjust x-axis limits
+        ax.set_ylim(0, 100)  # Adjust y-axis limits
+
+        # Add legends
+        legend1 = ax.legend(handles=turbine_handles, loc='upper left', title='Turbines', fontsize=12,
+                            title_fontsize=12)
+        ax.add_artist(legend1)  # Add the turbine legend first
+        ax.legend(handles=wind_handles, loc='upper right', title='Wind Distributions', fontsize=12,
+                  title_fontsize=12)
+
+        plt.tight_layout()
+
+        # Save the plot if save_path is provided
+        if save:
+            os.makedirs(os.path.dirname(save), exist_ok=True)  # Create directory if it doesn't exist
+            plt.savefig(save, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to {save}")
+
+        # Show the plot
+        plt.show()
+
+    def plot_performance(self, save=None, turbine_names=None, wind_distribution_names=None,
+                         cmap='viridis', multiplot=False):
+
+        if multiplot:
+            self._plot_performances_parameters_multiplot(save=save, turbine_names=turbine_names,
+                                                    wind_distribution_names=wind_distribution_names, cmap=cmap)
+        else:
+            self._plot_performances_parameters_monoplot(save=save, turbine_names=turbine_names,
+                                                   wind_distribution_names=wind_distribution_names, cmap=cmap)
+
+
+
+
 
 
 
