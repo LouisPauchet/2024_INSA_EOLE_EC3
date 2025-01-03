@@ -879,7 +879,8 @@ class ProcessWind():
             self._plot_performances_parameters_monoplot(save=save, turbine_names=turbine_names,
                                                    wind_distribution_names=wind_distribution_names, cmap=cmap)
 
-    def plot_turbine_performance(self, wind_distribution_name, turbine_names=None, rectangles=None, save=None):
+    def plot_turbine_performance(self, wind_distribution_name, turbine_names=None, rectangles=None, save=None,
+                                 wind_lim_per=1.05):
         """
         Plots the Power Output, Rotational Speed, and Torque for all turbines for a selected wind distribution.
         Allows shading areas delimited by wind speeds.
@@ -895,6 +896,7 @@ class ProcessWind():
                                        ...
                                    ]
             save (str): Path to save the plot. If None, the plot is not saved.
+            wind_lim_per (float): Percentage multiplier for wind speed axis limit (default: 1.05).
         """
         # Check if results exist
         if self.results is None:
@@ -913,15 +915,26 @@ class ProcessWind():
         # Create figure and subplots
         fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
 
+        # Store handles for the turbine legend and rectangle legend
+        legend_handles = []
+        rectangle_handles = []
+
+        cut_out = 30
+
         # Add shaded areas based on rectangles
         if rectangles:
             for rect in rectangles:
+                # Add shaded areas to all subplots
                 for ax in axes:
-                    ax.axvspan(rect['speed_min'], rect['speed_max'], color=rect['color'], alpha=rect['alpha'],
-                               label=rect.get('name', None))
-
-        # Store handles for the legend
-        legend_handles = []
+                    ax.axvspan(
+                        rect['speed_min'], rect['speed_max'], color=rect['color'], alpha=rect['alpha']
+                    )
+                # Add small rectangles to the legend
+                if rect['name'] not in [h.get_label() for h in rectangle_handles]:
+                    rectangle_handles.append(
+                        plt.Line2D([], [], color=rect['color'], marker='s', markersize=10, linestyle='',
+                                   alpha=rect['alpha'], label=rect['name'])
+                    )
 
         # Plot Power Output, Rotational Speed, and Torque
         for i, turbine in enumerate(self.turbines):
@@ -960,9 +973,13 @@ class ProcessWind():
                 line_style, color=color, alpha=0.8
             )
 
-            # Add to legend handles
+            # Add to turbine legend handles
             if display_name not in [h.get_label() for h in legend_handles]:
-                legend_handles.append(plt.Line2D([], [], color=color, linestyle=line_style, label=display_name))
+                legend_handles.append(
+                    plt.Line2D([], [], color=color, linestyle=line_style, label=display_name)
+                )
+
+            cut_out = turbine['cut_out']
 
         # Titles and labels
         axes[0].set_title('Power Output', fontsize=12, weight='bold')
@@ -981,17 +998,20 @@ class ProcessWind():
         # Set x-axis limits
         max_wind_speed = max(res['wind_speeds_m/s'].max() for res in filtered_results)
         for ax in axes:
-            ax.set_xlim(0, max_wind_speed)
+            ax.set_xlim(0, cut_out * wind_lim_per)
             ax.set_ylim(0)
 
-        # Add a single legend under the figure
+        # Combine turbine and rectangle handles for the legend
+        all_handles = legend_handles + rectangle_handles
+
+        # Add a single legend under the figure with 4 columns
         fig.legend(
-            handles=legend_handles, loc='lower center', ncol=len(legend_handles), fontsize=10, title='Turbines',
-            title_fontsize=12, bbox_to_anchor=(0.5, -0.1)
+            handles=all_handles, loc='lower center', ncol=4, fontsize=10, title='Legend',
+            title_fontsize=12, bbox_to_anchor=(0.5, -0.03)
         )
 
         # Adjust layout
-        plt.tight_layout(rect=[0, 0.1, 1, 1])  # Leave space for the legend
+        #plt.tight_layout(rect=[0, 0.25, 1, 1])  # Leave space for the legend
 
         # Save plot if save path is provided
         if save:
@@ -1001,6 +1021,78 @@ class ProcessWind():
 
         # Show plot
         plt.show()
+
+    def generate_turbine_operation_zones(self, turbine_name, wind_distribution_name, alpha = 0.2):
+        """
+        Generates control zone rectangles for a specific turbine and wind distribution.
+
+        Parameters:
+            turbine_name (str): The name of the turbine.
+            wind_distribution_name (str): The name of the wind distribution.
+
+        Returns:
+            list: A list of dictionaries defining the control zones.
+        """
+        # Find turbine data
+        turbine = next((t for t in self.turbines if t['name'] == turbine_name), None)
+        if not turbine:
+            raise ValueError(f"Turbine '{turbine_name}' not found in turbines.")
+
+        # Find results for the specified turbine and wind distribution
+        res = next((r for r in self.results if
+                    r['turbine'] == turbine_name and r['wind_distribution_name'] == wind_distribution_name), None)
+        if not res:
+            raise ValueError(
+                f"No results found for turbine '{turbine_name}' and wind distribution '{wind_distribution_name}'.")
+
+        # Retrieve turbine parameters
+        cut_in = turbine['cut_in']
+        cut_out = turbine['cut_out']
+
+        # Calculate transition speeds
+        try:
+            tc1_end = res['wind_speeds_m/s'][
+                np.where(res['rotational_speed_rad/s'] > self.rotmin2rads(turbine['min_rot_speed']))[0][0]]
+            tc2_end = res['wind_speeds_m/s'][
+                np.where(res['rotational_speed_rad/s'] > (self.rotmin2rads(turbine['max_rot_speed']) * 0.999))[0][0]]
+            tc3_end = res['wind_speeds_m/s'][np.where(res['power_W'] / 1e6 > turbine['rated_power'] * 0.999)[0][0]]
+        except IndexError as e:
+            raise ValueError(f"Could not calculate transition speeds due to missing or incomplete data: {e}")
+
+        # Define rectangles for the control zones
+        rec = [
+            {
+                'name': '1 - Torque Control',
+                'speed_min': cut_in,
+                'speed_max': tc1_end,
+                'color': 'g',
+                'alpha': alpha
+            },
+            {
+                'name': '2 - Optimum Torque Control',
+                'speed_min': tc1_end,
+                'speed_max': tc2_end,
+                'color': 'orange',
+                'alpha': alpha
+            },
+            {
+                'name': '3 - Torque Control',
+                'speed_min': tc2_end,
+                'speed_max': tc3_end,
+                'color': 'b',
+                'alpha': alpha
+            },
+            {
+                'name': '4 - Pitch Control',
+                'speed_min': tc3_end,
+                'speed_max': cut_out,
+                'color': 'purple',
+                'alpha': alpha
+            }
+        ]
+
+        return rec
+
 
 
 
