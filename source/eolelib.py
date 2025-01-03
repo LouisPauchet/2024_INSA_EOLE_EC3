@@ -362,11 +362,13 @@ class ProcessWind():
         # Rotational speed in radians per second
         omega = (TSR * wind_speed) / r_rotor
 
+        # Enforce rotational speed limits
+        omega = np.clip(omega, rot_min, rot_max)
+
         # Set power to 0 outside the cut-in and cut-out range
         omega = np.where((wind_speed < cut_in) | (wind_speed > cut_out), 0, omega)
 
-        # Enforce rotational speed limits
-        omega = np.clip(omega, rot_min, rot_max)
+
 
         return omega
 
@@ -876,6 +878,132 @@ class ProcessWind():
         else:
             self._plot_performances_parameters_monoplot(save=save, turbine_names=turbine_names,
                                                    wind_distribution_names=wind_distribution_names, cmap=cmap)
+
+    def plot_turbine_performance(self, wind_distribution_name, turbine_names=None, rectangles=None, save=None):
+        """
+        Plots the Power Output, Rotational Speed, and Torque for all turbines for a selected wind distribution.
+        Allows shading areas delimited by wind speeds.
+
+        Parameters:
+            wind_distribution_name (str): The wind distribution name to filter results.
+            turbine_names (dict): Optional dictionary to map turbine IDs to custom names.
+                                  Example: {'Turbine1': 'Small Turbine', 'Turbine2': 'Large Turbine'}
+            rectangles (list): List of dictionaries defining areas to shade with 'speed_min', 'speed_max', 'color', 'alpha'.
+                               Example:
+                                   [
+                                       {'name': 'Area1', 'speed_min': 5, 'speed_max': 6, 'color': 'r', 'alpha': 0.5},
+                                       ...
+                                   ]
+            save (str): Path to save the plot. If None, the plot is not saved.
+        """
+        # Check if results exist
+        if self.results is None:
+            self.calc_performances()
+
+        # Filter results for the selected wind distribution
+        filtered_results = [res for res in self.results if res['wind_distribution_name'] == wind_distribution_name]
+
+        if not filtered_results:
+            raise ValueError(f"No results found for wind distribution: {wind_distribution_name}")
+
+        # Define line styles and colors for distinction
+        line_styles = ['-', '--', '-.', ':']
+        colors = plt.cm.tab10.colors  # Use tab10 colormap for diverse colors
+
+        # Create figure and subplots
+        fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+
+        # Add shaded areas based on rectangles
+        if rectangles:
+            for rect in rectangles:
+                for ax in axes:
+                    ax.axvspan(rect['speed_min'], rect['speed_max'], color=rect['color'], alpha=rect['alpha'],
+                               label=rect.get('name', None))
+
+        # Store handles for the legend
+        legend_handles = []
+
+        # Plot Power Output, Rotational Speed, and Torque
+        for i, turbine in enumerate(self.turbines):
+            turbine_name = turbine['name']
+
+            # Find turbine-specific results
+            turbine_res = next(
+                (res for res in filtered_results if res['turbine'] == turbine_name),
+                None
+            )
+            if not turbine_res:
+                continue
+
+            # Select line style and color
+            line_style = line_styles[i % len(line_styles)]
+            color = colors[i % len(colors)]
+
+            # Use custom turbine names if provided
+            display_name = turbine_names.get(turbine_name, turbine_name) if turbine_names else turbine_name
+
+            # Power Output
+            axes[0].plot(
+                turbine_res['wind_speeds_m/s'], turbine_res['power_W'],
+                line_style, color=color, alpha=0.8, label=display_name
+            )
+
+            # Rotational Speed
+            axes[1].plot(
+                turbine_res['wind_speeds_m/s'], self.rads2rotmin(turbine_res['rotational_speed_rad/s']),
+                line_style, color=color, alpha=0.8
+            )
+
+            # Torque
+            axes[2].plot(
+                turbine_res['wind_speeds_m/s'], turbine_res['torque_Nm'],
+                line_style, color=color, alpha=0.8
+            )
+
+            # Add to legend handles
+            if display_name not in [h.get_label() for h in legend_handles]:
+                legend_handles.append(plt.Line2D([], [], color=color, linestyle=line_style, label=display_name))
+
+        # Titles and labels
+        axes[0].set_title('Power Output', fontsize=12, weight='bold')
+        axes[0].set_ylabel('Power (W)', fontsize=12)
+        axes[0].grid(linestyle='--', alpha=0.7)
+
+        axes[1].set_title('Rotational Speed', fontsize=12, weight='bold')
+        axes[1].set_ylabel('Speed (rpm)', fontsize=12)
+        axes[1].grid(linestyle='--', alpha=0.7)
+
+        axes[2].set_title('Torque', fontsize=12, weight='bold')
+        axes[2].set_xlabel('Wind Speed (m/s)', fontsize=12)
+        axes[2].set_ylabel('Torque (Nm)', fontsize=12)
+        axes[2].grid(linestyle='--', alpha=0.7)
+
+        # Set x-axis limits
+        max_wind_speed = max(res['wind_speeds_m/s'].max() for res in filtered_results)
+        for ax in axes:
+            ax.set_xlim(0, max_wind_speed)
+            ax.set_ylim(0)
+
+        # Add a single legend under the figure
+        fig.legend(
+            handles=legend_handles, loc='lower center', ncol=len(legend_handles), fontsize=10, title='Turbines',
+            title_fontsize=12, bbox_to_anchor=(0.5, -0.1)
+        )
+
+        # Adjust layout
+        plt.tight_layout(rect=[0, 0.1, 1, 1])  # Leave space for the legend
+
+        # Save plot if save path is provided
+        if save:
+            os.makedirs(os.path.dirname(save), exist_ok=True)  # Ensure directory exists
+            plt.savefig(save, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to {save}")
+
+        # Show plot
+        plt.show()
+
+
+
 
 
 
