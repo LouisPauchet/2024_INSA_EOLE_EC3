@@ -1093,18 +1093,3 @@ class ProcessWind():
 
         return rec
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
