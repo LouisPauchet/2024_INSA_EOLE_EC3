@@ -13,15 +13,22 @@ class assignement_parameters():
             "opex_per_MW_per_year" : 1e5,
             "life_time_year" : 25,
             "decommissioning_per_MW" : 2e5,
-            "discount_rate" : 0.07
-
+            "discount_rate" : 0.07,
+            "Young_Mod_Steal_GPa" : 210,
+            "SN_Curve_MPa" : {
+                "log(a)" : 16.3,
+                "Wohler_slope_m" : 5
+            },
+            "n_cycle" : 1e7,
+            "max_diam_thickness_ratio" : 350,
+            "safety_factor_stress" : 1.25,
+            "tip_ground_clearance_m" : 30
         }
         self.turbines = [
             {
                 "name": "Small_Rotor_Small_Gen",
                 "rotor_diam": 130,
-                "mass": 250,
-                "blade_tip_ground_clearance": 30,
+                "mass_RNA_tons": 250,
                 "rated_power": 5,
                 "min_rot_speed": 3.5,
                 "max_rot_speed": 9,
@@ -34,8 +41,7 @@ class assignement_parameters():
             {
                 "name": "Small_Rotor_Large_Gen",
                 "rotor_diam": 130,
-                "mass": 400,
-                "blade_tip_ground_clearance": 30,
+                "mass_RNA_tons": 400,
                 "rated_power": 8,
                 "min_rot_speed": 3.5,
                 "max_rot_speed": 9,
@@ -49,8 +55,7 @@ class assignement_parameters():
             {
                 "name": "Large_Rotor_Small_Gen",
                 "rotor_diam": 160,
-                "mass": 400,
-                "blade_tip_ground_clearance": 30,
+                "mass_RNA_tons": 400,
                 "rated_power": 5,
                 "min_rot_speed": 3.5,
                 "max_rot_speed": 9,
@@ -63,8 +68,7 @@ class assignement_parameters():
             {
                 "name": "Large_Rotor_Large_Gen",
                 "rotor_diam": 160,
-                "mass": 600,
-                "blade_tip_ground_clearance": 30,
+                "mass_RNA_tons": 600,
                 "rated_power": 8,
                 "min_rot_speed": 3.5,
                 "max_rot_speed": 9,
@@ -82,18 +86,225 @@ class TowerDesign():
         self.assignement_parameters = assignement_parameters()
         self.physics = self.assignement_parameters.physics
         self.turbines = [
-            self.update_turbine_with_distribution(turbine)
+            self._update_turbine_with_distribution(turbine)
             for turbine in self.assignement_parameters.turbines
             if turbine.get('name') in self.selected_turbines.values()
         ]
     
-    def update_turbine_with_distribution(self, turbine):
+    def _update_turbine_with_distribution(self, turbine):
         for key, value in self.selected_turbines.items():
             if turbine.get('name') == value:
                 turbine["wind_distribution"] = key
         return turbine
 
+    def update_turbine(self, turbine_name, parameters, force=False):
+        """
+        Updates the turbine dictionary with the given parameters.
+        Optionally forces the update if `force=True`.
 
+        Parameters:
+        turbine_name (str): The name of the turbine to update.
+        parameters (dict): A dictionary of parameters to update or add.
+        force (bool): Whether to force the update, even if the parameter already exists.
+        """
+        # Find the turbine by its name
+        turbine = next((t for t in self.turbines if t.get('name') == turbine_name), None)
+
+        if turbine is None:
+            print(f"Turbine with name '{turbine_name}' not found.")
+            return
+
+        # Update turbine with the new parameters
+        for param_key, param_value in parameters.items():
+            if param_key not in turbine or force:
+                turbine[param_key] = param_value
+            else:
+                print(f"Parameter '{param_key}' already exists and 'force' is not set.")
+
+        return turbine
+
+    def get_turbines(self, turbine_name):
+        return [turbine for turbine in self.turbines if turbine_name == turbine.get('name')][0]
+
+    def _calc_tower_height(self, turbine_name):
+        """Calculates the height of the tower based on the rotor diameter and tip-to-ground clearance."""
+        turbine = self.get_turbines(turbine_name)
+        rotor_radius = turbine.get('rotor_diam') / 2
+        tower_height = rotor_radius + self.physics['tip_ground_clearance_m']
+
+        self.update_turbine(turbine_name, {"tower_height_m": tower_height}, force=True)
+
+        return tower_height
+
+    def _calc_1P_3P_frequency(self, turbine_name):
+        """Calculates the 1P frequency of the turbine (in Hz) based on both max and min rotor speeds, and returns the frequency range."""
+        turbine = self.get_turbines(turbine_name)
+
+        # Get the maximum and minimum rotor speeds in RPM
+        max_rot_speed_rpm = turbine.get('max_rot_speed')
+        min_rot_speed_rpm = turbine.get('min_rot_speed')
+
+        # Convert the rotor speeds from RPM to Hz
+        max_f_1P = max_rot_speed_rpm / 60  # Max 1P frequency (Hz)
+        min_f_1P = min_rot_speed_rpm / 60  # Min 1P frequency (Hz)
+
+        # Create a DataFrame with the frequency range (start and end)
+        frequency_range_1P = {
+            'min' : min_f_1P,
+            'max' : max_f_1P
+        }
+        frequency_range_3P = {
+            'min' : 3 * min_f_1P,
+            'max' : 3 * max_f_1P
+        }
+
+        # Update turbine data with the max 1P frequency
+        self.update_turbine(turbine_name, {'f_1P': frequency_range_1P, 'f_3P' : frequency_range_3P}, force=True)
+
+        return frequency_range_1P, frequency_range_3P
+
+    def _calc_1st_eigen_frequency(self, turbine_name, d):
+        """Calculates the first eigen frequency of the tower based on its dimensions and material properties."""
+        turbine = self.get_turbines(turbine_name)
+
+        # Calculate thickness based on D/t ratio
+        thickness = (d / self.physics['max_diam_thickness_ratio']) * 2 #Twice the minimum value according the assigment instructions
+        inner_diameter = d - (2 * thickness)
+
+        # Calculate the cross-sectional moment of inertia
+        moment_of_inertia = np.pi / 64 * (d ** 4 - inner_diameter ** 4)
+
+        # Calculate the first eigen frequency
+        tower_height = turbine.get("tower_height_m")
+        young_modulus = self.physics.get('Young_Mod_Steal_GPa')
+        mass_rna = turbine.get('mass_RNA_tons')  # in tons
+
+        first_eigen_frequency = (3. / tower_height**2) * np.sqrt((young_modulus * 1e6 * moment_of_inertia) / mass_rna)
+
+        self.update_turbine(turbine_name,
+                            {'first_eigen_frequency': first_eigen_frequency,
+                             'moment_of_inertia' : moment_of_inertia,
+                             'thickness' : thickness}, force=True)
+
+        return first_eigen_frequency
+
+    def _calc_fatigue_damage(self, turbine_name, d):
+        # Retrieve turbine data
+        turbine = self.get_turbines(turbine_name)
+
+        # Calculate the tower thickness based on the D/t ratio (350)
+        thickness = turbine.get('thickness')
+        inner_diameter = d - 2 * thickness
+
+        # Calculate the moment of inertia (I) for the tower's cylindrical cross-section
+        moment_of_inertia = turbine.get('moment_of_inertia')
+
+        S_xy = moment_of_inertia / (d/2)
+
+        # Calculate the equivalent stress (sigma_eq) from the equivalent load
+        sigma_eq = turbine.get('tower_eq_load') / S_xy  # Assumes load in MN.m
+
+        # Apply safety factor on the stress
+        sigma_eff = sigma_eq * self.physics.get('safety_factor_stress')
+
+        # Retrieve S-N curve parameters from the physics data
+        sn_curve = self.physics.get('SN_Curve_MPa')
+
+        # Calculate the number of cycles to failure (N) using the S-N curve
+        N = 10 ** (sn_curve.get('log(a)') - sn_curve.get('Wohler_slope_m') * np.log10(sigma_eff))
+
+        # Calculate the fatigue damage using Palmgren-Miner rule (D = n / N)
+        fatigue_damage = self.physics.get('n_cycle') / N  # n_cycle is the equivalent number of cycles (e.g., 10^7) - unit %
+
+        # Update turbine data with the calculated fatigue damage
+        self.update_turbine(turbine_name, {'fatigue_damage': fatigue_damage, 'N' : N}, force=True)
+
+        return fatigue_damage
+
+    def calc_tower(self, d_min, d_max, n=500):
+        d = np.linspace(d_min, d_max, n)
+        for turbine in self.turbines:
+            self.update_turbine(turbine.get('name'), {"d": d}, force=True)
+            self._calc_tower_height(turbine.get('name'))
+            self._calc_1P_3P_frequency(turbine.get('name'))
+            self._calc_1st_eigen_frequency(turbine.get('name'), d)
+            self._calc_fatigue_damage(turbine.get('name'), d)
+
+    def plot_fatigue_and_frequency(self, save = None):
+        """
+        This function plots the fatigue damage and first eigenfrequency for all turbines,
+        using different colors and markers, and includes the 1P and 3P frequency ranges as shaded regions.
+        """
+        plt.figure(figsize=(10, 5))
+
+        # Color and marker options for different turbines
+        colors = ['b', 'g', 'r', 'c', 'm', 'y']
+        markers = ['o', 's', '^', 'D', 'P', '*']
+
+        # Create axes
+        ax = plt.gca()
+        ax.set_ylabel("Fatigue Damage")
+        ax.set_ylim(0, 1)
+
+        # Create a second y-axis for the first eigen frequency
+        ax2 = ax.twinx()
+        ax2.set_ylabel('First Eigen Frequency')
+
+        # List to hold legend handles and labels for consolidating the legend
+        handles, labels = [], []
+
+        # Iterate through turbines and plot each one
+        for idx, turbine in enumerate(self.turbines):
+            # Get the distribution type ('low' or 'high') for the turbine
+            wind_dist = turbine.get("wind_distribution", "unknown")
+
+            # Choose color and marker based on index
+            color = colors[idx % len(colors)]
+            marker = markers[idx % len(markers)]
+
+            # Plot fatigue damage for each turbine
+            line1, = ax.plot(turbine.get('d'), turbine.get('fatigue_damage'), marker=marker, color=color,
+                             label=f'{turbine["name"]} - Fatigue Damage')
+
+            # Plot first eigen frequency for each turbine
+            line2, = ax2.plot(turbine.get('d'), turbine.get('first_eigen_frequency'), linestyle='--', color=color,
+                              label=f'{turbine["name"]} - First Eigen Frequency')
+
+            # Add handles for the legend
+            handles.extend([line1, line2])
+
+        # Plot 1P and 3P frequency ranges as shaded regions for all turbines
+        ax2.axhspan(turbine.get('f_1P').get('min'), turbine.get('f_1P').get('max'), color='r', alpha=0.3,
+                    label='1P Range')
+        ax2.axhspan(turbine.get('f_3P').get('min'), turbine.get('f_3P').get('max'), color='g', alpha=0.3,
+                    label='3P Range')
+
+        # Add the labels for the 1P and 3P areas
+        ax2.text(10, (turbine.get('f_1P').get('min') + turbine.get('f_1P').get('max')) / 2, '1P Range',
+                 color='r', fontsize=12, ha='right', va='center')
+        ax2.text(10, (turbine.get('f_3P').get('min') + turbine.get('f_3P').get('max')) / 2, '3P Range',
+                 color='g', fontsize=12, ha='right', va='center')
+
+        # Add the text annotations for the areas below 1P, between 1P and 3P, and above 3P
+        ax2.text(10, turbine.get('f_1P').get('min') / 2, 'Soft-Soft', color='k', fontsize=8, ha='right', va='center', fontweight='bold')
+        ax2.text(10, (turbine.get('f_1P').get('max') + turbine.get('f_3P').get('min')) / 2, 'Stiff-Soft', color='k', fontsize=8, ha='right', va='center', fontweight='bold')
+        ax2.text(10, (turbine.get('f_3P').get('max') * 1.05), 'Stiff-Stiff', color='k', fontsize=8, ha='right', va='center', fontweight='bold')
+
+        ax2.set_ylim(0, 0.7)
+
+        # Add legend only once
+        ax2.legend(handles=handles, loc='upper right')
+
+        # Adding a grid
+        ax2.grid(True)
+
+        # Show plot
+        plt.title("Fatigue Damage vs. First Eigen Frequency for Multiple Turbines")
+
+        if save is not None:
+            plt.savefig(save, dpi=300)
+
+        plt.show()
 
 
 class ProcessWind():
