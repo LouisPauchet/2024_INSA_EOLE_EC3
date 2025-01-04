@@ -6,15 +6,8 @@ from scipy.interpolate import interp1d
 import numpy as np
 import os
 
-class ProcessWind():
-    def __init__(self, paths, cp_path = None):
-        self.paths = paths
-        self._load_data(paths)
-        if cp_path is not None:
-            self._load_cp(path=cp_path)
-        else:
-            self._load_cp()
-        self.params = {}
+class assignement_parameters():
+    def __init__(self):
         self.physics = {
             "air_density" : 1.225,
             "opex_per_MW_per_year" : 1e5,
@@ -23,21 +16,20 @@ class ProcessWind():
             "discount_rate" : 0.07
 
         }
-        self.cp_interpolator = None
         self.turbines = [
             {
-                "name" : "Small_Rotor_Small_Gen",
-                "rotor_diam" : 130,
-                "mass" : 250,
-                "blade_tip_ground_clearance" : 30,
-                "rated_power" : 5,
-                "min_rot_speed" : 3.5,
-                "max_rot_speed" : 9,
-                "cut_in" : 3,
-                "cut_out" : 25,
-                "tower_eq_load" : 15,
-                "efficiency" : 0.6,
-                "cost" : 15e6
+                "name": "Small_Rotor_Small_Gen",
+                "rotor_diam": 130,
+                "mass": 250,
+                "blade_tip_ground_clearance": 30,
+                "rated_power": 5,
+                "min_rot_speed": 3.5,
+                "max_rot_speed": 9,
+                "cut_in": 3,
+                "cut_out": 25,
+                "tower_eq_load": 15,
+                "efficiency": 0.6,
+                "cost": 15e6
             },
             {
                 "name": "Small_Rotor_Large_Gen",
@@ -50,8 +42,8 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 15,
-                "efficiency" : 0.6,
-                "cost" : 20e6
+                "efficiency": 0.6,
+                "cost": 20e6
 
             },
             {
@@ -65,8 +57,8 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 20,
-                "efficiency" : 0.6,
-                "cost" : 20e6
+                "efficiency": 0.6,
+                "cost": 20e6
             },
             {
                 "name": "Large_Rotor_Large_Gen",
@@ -79,10 +71,44 @@ class ProcessWind():
                 "cut_in": 3,
                 "cut_out": 25,
                 "tower_eq_load": 25,
-                "efficiency" : 0.6,
-                "cost" : 24e6
+                "efficiency": 0.6,
+                "cost": 24e6
             }
         ]
+
+class TowerDesign():
+    def __init__(self, selected_turbines):
+        self.selected_turbines = selected_turbines
+        self.assignement_parameters = assignement_parameters()
+        self.physics = self.assignement_parameters.physics
+        self.turbines = [
+            self.update_turbine_with_distribution(turbine)
+            for turbine in self.assignement_parameters.turbines
+            if turbine.get('name') in self.selected_turbines.values()
+        ]
+    
+    def update_turbine_with_distribution(self, turbine):
+        for key, value in self.selected_turbines.items():
+            if turbine.get('name') == value:
+                turbine["wind_distribution"] = key
+        return turbine
+
+
+
+
+class ProcessWind():
+    def __init__(self, paths, cp_path = None):
+        self.paths = paths
+        self._load_data(paths)
+        if cp_path is not None:
+            self._load_cp(path=cp_path)
+        else:
+            self._load_cp()
+        self.assignement_parameters = assignement_parameters()
+        self.params = {}
+        self.physics = self.assignement_parameters.physics
+        self.cp_interpolator = None
+        self.turbines = self.assignement_parameters.turbines
         self.results = []
         self.wind_speeds = []
 
@@ -128,7 +154,7 @@ class ProcessWind():
         sns.set_theme(style="ticks")
 
         # Create the figure
-        fig = plt.figure(figsize=(6, 4))
+        fig = plt.figure(figsize=(5, 4))
 
         # Plot the Cp curve (fitted and data points)
         plt.plot(self.cp_data["df_fine"]["TSR"], self.cp_data["df_fine"]["Cp"],
@@ -146,9 +172,10 @@ class ProcessWind():
 
         # Add the maximum Cp point with the value in the legend
         max_label = (
-            rf"Max Cp ($C_p = {max_Cp:.2f}$, TSR = {TSR_max_Cp:.2f})"
+            rf"Max Cp \n($C_p = {max_Cp:.2f}$, TSR = {TSR_max_Cp:.2f})"
+            #rf"Max Cp \\ (C_p = {max_Cp:.2f}$, TSR = {TSR_max_Cp:.2f})"
             if latex else
-            f"Max Cp (Cp = {max_Cp:.2f}, TSR = {TSR_max_Cp:.2f})"
+            f"Max Cp \n(Cp = {max_Cp:.2f}, TSR = {TSR_max_Cp:.2f})"
         )
         plt.plot([TSR_max_Cp], [max_Cp], "or", label=max_label)
 
@@ -156,7 +183,7 @@ class ProcessWind():
         plt.xlabel("TSR")
         plt.ylabel("Cp")
         plt.title("Power Coefficient (Cp) vs Tip-Speed Ratio (TSR)")
-        plt.legend()
+        plt.legend(loc="lower left")
 
         # Save the figure if needed
         if save is not None:
@@ -206,7 +233,7 @@ class ProcessWind():
         """
         if labels is None:
             labels = [key for key in self.df.keys()]
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(5, 8))
         sns.boxplot(data=self.df, orient='v', palette="Set2")
         plt.title(title, fontsize=16)
         plt.ylabel(ylabel, fontsize=14)
@@ -216,6 +243,47 @@ class ProcessWind():
         if save is not None:
             plt.savefig(save, dpi=300)
         plt.show()
+
+    def wind_speed_statistics(self, threshold=12, bins=50):
+        """
+        Calculates wind speed statistics for numerical columns in the dataset.
+
+        Parameters:
+            threshold (float): The wind speed threshold to calculate exceedance probability (default is 12 m/s).
+            bins (int): Number of bins for calculating the most frequent wind speed.
+
+        Returns:
+            pd.DataFrame: DataFrame with mean, most frequent wind speed, and exceedance probability for each column.
+        """
+        stats = []
+
+        for col in self.df.columns:
+            if self.df[col].dtype in ['float64', 'int64']:  # Only process numerical columns
+                data = self.df[col].dropna()
+
+                # Calculate the most frequent wind speed using a histogram
+                hist_counts, bin_edges = np.histogram(data, bins=bins)
+                most_frequent_bin_index = np.argmax(hist_counts)
+                most_frequent_wind_speed = (bin_edges[most_frequent_bin_index] + bin_edges[
+                    most_frequent_bin_index + 1]) / 2
+
+                # Calculate the probability of wind speed exceeding the threshold
+                exceedance_prob = (data > threshold).mean()
+
+                # Append statistics for the current column
+                stats.append({
+                    'Column': col,
+                    'Mean Wind Speed (m/s)': data.mean(),
+                    'Standard Deviation (m/s)' : data.std(),
+                    'Most Frequent Wind Speed (m/s)': most_frequent_wind_speed,
+                    f'P(Wind Speed > {threshold} m/s)': exceedance_prob,
+                    'Median Wind Speed (m/s)' : data.median()
+                })
+
+        # Convert stats to a DataFrame
+        stats_df = pd.DataFrame(stats)
+
+        return stats_df
 
     def distribution(self, bins=50, save=None, title='Histogram of Wind Speeds', xlabel='Wind Speed (m/s)',
                      ylabel='Frequency', labels=None):
@@ -230,7 +298,7 @@ class ProcessWind():
             ylabel (str): Label for the y-axis.
             labels (list): Custom labels for the columns. Default is None (uses column names).
         """
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(10, 5))
 
         # Use column names as labels if no custom labels are provided
         if labels is None:
@@ -262,7 +330,7 @@ class ProcessWind():
         plt.title(title, fontsize=16)
         plt.xlabel(xlabel, fontsize=14)
         plt.ylabel(ylabel, fontsize=14)
-        plt.legend(loc='upper right', fontsize=10)
+        plt.legend(loc='upper right', fontsize=12)
         plt.grid(alpha=0.3, linestyle='--')
         plt.xlim(left=0)  # Ensure x-axis starts at 0
 
