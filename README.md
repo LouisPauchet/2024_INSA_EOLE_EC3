@@ -1,5 +1,7 @@
 # EC3 Project - Chaire Eole at INSA Rouen Normandie
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14601627.svg)](https://doi.org/10.5281/zenodo.14601627)
+
 This repository contains the code developed for the EC3 project, conducted under the Chaire Eole at INSA Rouen Normandie. The project focuses on the design, analysis, and optimization of wind turbine towers, specifically addressing factors such as fatigue damage, first eigenfrequency, and structural stability. Additionally, the code is used for processing wind data and designing the rotor and generator size based on the given wind distribution.
 
 ## Key Features:
