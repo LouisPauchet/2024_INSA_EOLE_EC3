@@ -230,25 +230,26 @@ class TowerDesign():
             self._calc_1st_eigen_frequency(turbine.get('name'), d)
             self._calc_fatigue_damage(turbine.get('name'), d)
 
-    def plot_fatigue_and_frequency(self, save = None):
+    def plot_fatigue_and_frequency(self, turbine_names=None, save=None):
         """
         This function plots the fatigue damage and first eigenfrequency for all turbines,
         using different colors and markers, and includes the 1P and 3P frequency ranges as shaded regions.
+        turbine_names: A dictionary with turbine name as key and custom turbine name as value.
         """
         plt.figure(figsize=(10, 5))
 
         # Color and marker options for different turbines
         colors = ['b', 'g', 'r', 'c', 'm', 'y']
-        markers = ['o', 's', '^', 'D', 'P', '*']
 
         # Create axes
         ax = plt.gca()
-        ax.set_ylabel("Fatigue Damage")
-        ax.set_ylim(0, 1)
+        ax.set_ylabel("Fatigue Damage [%]")
+        ax.set_xlabel("Tower diameter [m]")
+        ax.set_ylim(0, 100)
 
         # Create a second y-axis for the first eigen frequency
         ax2 = ax.twinx()
-        ax2.set_ylabel('First Eigen Frequency')
+        ax2.set_ylabel('Eigen Frequency [Hz]')
 
         # List to hold legend handles and labels for consolidating the legend
         handles, labels = [], []
@@ -260,18 +261,28 @@ class TowerDesign():
 
             # Choose color and marker based on index
             color = colors[idx % len(colors)]
-            marker = markers[idx % len(markers)]
+
+            # Get the turbine name, or use the custom name if provided
+            turbine_name = turbine_names.get(turbine["name"], turbine["name"]) if turbine_names else turbine["name"]
 
             # Plot fatigue damage for each turbine
-            line1, = ax.plot(turbine.get('d'), turbine.get('fatigue_damage'), marker=marker, color=color,
-                             label=f'{turbine["name"]} - Fatigue Damage')
+            line1, = ax.plot(turbine.get('d'), turbine.get('fatigue_damage')*100, '--', color=color,
+                             label=f'{turbine_name} - Fatigue Damage')
+
+            x = turbine.get('d')[np.where(turbine.get('fatigue_damage') < 1)[0][0]]
+
+            ax.axvline(x= x, color='k', linestyle='--', linewidth=0.5)
+            ax.text(x, 0, f"{x:.1f}", color='k', fontsize=10, ha='right', va='bottom')
 
             # Plot first eigen frequency for each turbine
-            line2, = ax2.plot(turbine.get('d'), turbine.get('first_eigen_frequency'), linestyle='--', color=color,
-                              label=f'{turbine["name"]} - First Eigen Frequency')
+            line2, = ax2.plot(turbine.get('d'), turbine.get('first_eigen_frequency'), '-' , color=color,
+                              label=f'{turbine_name} - First Eigen Frequency')
 
             # Add handles for the legend
             handles.extend([line1, line2])
+
+        ax.axvline(x=4.9, color='k', linestyle='--', linewidth=0.5)
+        ax.text(4.9, 0, f"{4.9}", color='k', fontsize=10, ha='right', va='bottom')
 
         # Plot 1P and 3P frequency ranges as shaded regions for all turbines
         ax2.axhspan(turbine.get('f_1P').get('min'), turbine.get('f_1P').get('max'), color='r', alpha=0.3,
@@ -292,7 +303,7 @@ class TowerDesign():
 
         ax2.set_ylim(0, 0.7)
 
-        # Add legend only once
+        # Add legend only once, using black markers for the different parameters
         ax2.legend(handles=handles, loc='upper right')
 
         # Adding a grid
